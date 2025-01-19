@@ -3,7 +3,7 @@ import random
 import time
 
 K = 10
-DIM = 32
+DIM = 128
 
 
 class Node:
@@ -16,14 +16,15 @@ class Node:
 
 def main():
     print("Starting")
-    vectors = [random_vector(DIM) for _ in range(1000)]
+    vectors = [random_vector(DIM) for _ in range(10000)]
 
     print("Indexing")
+    t0 = time.time()
     # Index
     nodes: list[Node] = []
     for v in vectors:
         node_sims = sorted(
-            [(n, cosine_similarity(v, n.vector)) for n in nodes],
+            nsw_search(nodes, v, iters=10).items(),
             key=lambda node_sim: -node_sim[1],
         )
 
@@ -35,15 +36,20 @@ def main():
 
         nodes.append(new_node)
 
+    index_time = time.time() - t0
+    print(f"Indexing took: {index_time:.5f} seconds")
+
     # Search
     search_vector = random_vector(DIM)
 
     print("Searching")
+
     # NSW
     t0 = time.time()
-    _, best_node_sim = nsw_search(nodes, search_vector, iters=10)
+    nsw_sims = nsw_search(nodes, search_vector, iters=10)
     nsw_time = time.time() - t0
 
+    best_node_sim = max(nsw_sims.items(), key=lambda x: x[1])[1]
     print("NSW", best_node_sim, nsw_time)
 
     # Naive
@@ -72,30 +78,32 @@ def vector_norm(v: list[float]) -> float:
 
 def nsw_search(
     nodes: list[Node], search_vector: list[float], iters: int = 10
-) -> tuple[Node, float]:
-    best_node_sim = 0
-    best_node = nodes[0]
-    for _ in range(iters):
+) -> dict[Node, float]:
+    if not nodes:
+        return {}
+
+    def search():
+        sims = {}
         node = random.choice(nodes)
         while True:
-            sim = cosine_similarity(search_vector, node.vector)
-            max_neigbour, max_neigbour_sim = max(
-                [
-                    (n, cosine_similarity(search_vector, n.vector))
-                    for n, _ in node.neighbours
-                ],
-                key=lambda node_sim: node_sim[1],
-            )
-            if max_neigbour_sim > sim:
-                node = max_neigbour
-            else:
-                break
+            if node not in sims:
+                sims[node] = cosine_similarity(search_vector, node.vector)
 
-        if sim > best_node_sim:
-            best_node_sim = sim
-            best_node = node
+            for n, _ in node.neighbours:
+                if n in sims:
+                    continue
+                sims[n] = cosine_similarity(search_vector, n.vector)
 
-    return best_node, best_node_sim
+            max_node, _ = max(sims.items(), key=lambda x: x[1])
+            if max_node == node:
+                return sims
+            node = max_node
+
+    sims = {}
+    for _ in range(iters):
+        sims.update(search())
+
+    return sims
 
 
 if __name__ == "__main__":
