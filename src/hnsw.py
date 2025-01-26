@@ -1,9 +1,10 @@
+import math
 import random
 import time
 
 from common import random_vector, cosine_similarity
 
-DIM = 32
+DIM = 8
 
 
 class Node:
@@ -22,12 +23,12 @@ class HNSW:
     def __init__(
         self,
         n_layers: int,
-        p_layer: float = 0.2,
-        n_edges: tuple[int, int] = (10, 5),
+        n_edges: int = 8,
+        p_layer: float | None = None,
     ) -> None:
         self.layers: list[list[Node]] = [[] for _ in range(n_layers)]
-        self.p_layer = p_layer
-        self.n_edges = n_edges
+        self.n_edges = (2 * n_edges, n_edges)
+        self.p_layer = p_layer if p_layer is not None else 1 / math.log(n_edges)
 
     def add_node(self, vector: list[float]) -> None:
         parent = None
@@ -137,7 +138,7 @@ def main():
     print("Indexing")
     t0 = time.time()
     # Index
-    index = HNSW(n_layers=3, p_layer=0.3, n_edges=(5, 10))
+    index = HNSW(n_layers=4, n_edges=8)
     for v in vectors:
         index.add_node(v)
 

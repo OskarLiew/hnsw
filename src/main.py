@@ -1,6 +1,5 @@
 import time
 
-from scipy.stats.contingency import math
 import tqdm
 import numpy as np
 import scipy.stats
@@ -16,7 +15,7 @@ N_SAMPLES = 100
 
 
 def main():
-    vectors = [random_vector(DIM) for _ in range(2000)]
+    vectors = [random_vector(DIM) for _ in range(10000)]
     search_vector = random_vector(DIM)
 
     # Naive
@@ -32,7 +31,8 @@ def main():
     )
 
     # NSW
-    nsw_index = NSW(n_edges=16)
+    n_edges = 16
+    nsw_index = NSW(n_edges=n_edges)
     for vector in tqdm.tqdm(vectors, desc="Indexing NSW"):
         nsw_index.add_node(vector)
     nsw_results = [
@@ -44,17 +44,14 @@ def main():
     mean_sims, diff_sims = mean_and_interval(nsw_sims, confidence=0.95)
     mean_time, diff_time = mean_and_interval(nsw_times, confidence=0.95)
     print(
-        f"Similarity: {mean_sims:.4f} +/- {diff_sims:.3e}\n"
+        f"Similarity: {mean_sims:.4f} +/- {diff_sims:.3e}, median {np.median(nsw_sims):.4f}\n"
         f"Runtime: {mean_time:.4f} +/- {diff_time:.3e} seconds\n"
     )
 
     # HNSW
-    n_layers = 5
-    n_edges = (16, 8)
     hnsw_index = HNSW(
-        n_layers=n_layers,
-        p_layer=1 / math.log(n_edges[0]),
-        n_edges=n_edges,
+        n_layers=4,
+        n_edges=8,
     )
     for vector in tqdm.tqdm(vectors, desc="Indexing HNSW"):
         hnsw_index.add_node(vector)
@@ -68,7 +65,7 @@ def main():
     mean_sims, diff_sims = mean_and_interval(hnsw_sims, confidence=0.95)
     mean_time, diff_time = mean_and_interval(hnsw_times, confidence=0.95)
     print(
-        f"Similarity: {mean_sims:.4f} +/- {diff_sims:.3e}\n"
+        f"Similarity: {mean_sims:.4f} +/- {diff_sims:.3e}, median {np.median(nsw_sims):.4f}\n"
         f"Runtime: {mean_time:.4f} +/- {diff_time:.3e} seconds\n"
     )
 
