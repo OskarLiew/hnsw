@@ -1,9 +1,10 @@
-import math
 import random
 import time
 
+from common import random_vector, cosine_similarity
+
 K = 10
-DIM = 128
+DIM = 8
 
 
 class Node:
@@ -16,7 +17,7 @@ class Node:
 
 def main():
     print("Starting")
-    vectors = [random_vector(DIM) for _ in range(10000)]
+    vectors = [random_vector(DIM) for _ in range(1000)]
 
     print("Indexing")
     t0 = time.time()
@@ -58,22 +59,6 @@ def main():
     naive_time = time.time() - t0
 
     print("Naive", naive_best, naive_time)
-
-
-def random_vector(size: int) -> list[float]:
-    return [random.random() for _ in range(size)]
-
-
-def cosine_similarity(v1: list[float], v2: list[float]) -> float:
-    assert len(v1) == len(v2)
-
-    m1 = vector_norm(v1)
-    m2 = vector_norm(v2)
-    return sum(e1 * e2 / (m1 * m2) for e1, e2 in zip(v1, v2))
-
-
-def vector_norm(v: list[float]) -> float:
-    return math.sqrt(sum(e**2 for e in v))
 
 
 def nsw_search(
