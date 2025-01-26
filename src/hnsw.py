@@ -119,7 +119,7 @@ def main():
     print("Indexing")
     t0 = time.time()
     # Index
-    index = HNSW(m_l=5, p_l=0.5)
+    index = HNSW(m_l=3, p_l=0.3)
     for v in vectors:
         index.add_node(v)
 
@@ -145,36 +145,6 @@ def main():
     naive_time = time.time() - t0
 
     print("Naive", naive_best, naive_time)
-
-
-def nsw_search(
-    nodes: list[Node], search_vector: list[float], iters: int = 10
-) -> dict[Node, float]:
-    if not nodes:
-        return {}
-
-    def search():
-        sims = {}
-        node = random.choice(nodes)
-        while True:
-            if node not in sims:
-                sims[node] = cosine_similarity(search_vector, node.vector)
-
-            for n, _ in node.neighbours:
-                if n in sims:
-                    continue
-                sims[n] = cosine_similarity(search_vector, n.vector)
-
-            max_node, _ = max(sims.items(), key=lambda x: x[1])
-            if max_node == node:
-                return sims
-            node = max_node
-
-    sims = {}
-    for _ in range(iters):
-        sims.update(search())
-
-    return sims
 
 
 if __name__ == "__main__":

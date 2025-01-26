@@ -15,61 +15,24 @@ class Node:
         self.neighbours = neighbours or []
 
 
-def main():
-    print("Starting")
-    vectors = [random_vector(DIM) for _ in range(1000)]
+class NSW:
+    def __init__(self) -> None:
+        self.nodes = []
 
-    print("Indexing")
-    t0 = time.time()
-    # Index
-    nodes: list[Node] = []
-    for v in vectors:
-        node_sims = sorted(
-            nsw_search(nodes, v, iters=10).items(),
-            key=lambda node_sim: -node_sim[1],
-        )
+    def add_node(self, vector: list[float]) -> None:
+        node_sims = self.search(vector)
 
-        new_node = Node(v, neighbours=node_sims[:K])
+        new_node = Node(vector, neighbours=node_sims[:K])
         for n, sim in node_sims[:K]:
             n.neighbours = sorted(
                 n.neighbours + [(new_node, sim)], key=lambda node_sim: -node_sim[1]
             )[:K]
 
-        nodes.append(new_node)
+        self.nodes.append(new_node)
 
-    index_time = time.time() - t0
-    print(f"Indexing took: {index_time:.5f} seconds")
-
-    # Search
-    search_vector = random_vector(DIM)
-
-    print("Searching")
-
-    # NSW
-    t0 = time.time()
-    nsw_sims = nsw_search(nodes, search_vector, iters=10)
-    nsw_time = time.time() - t0
-
-    best_node_sim = max(nsw_sims.items(), key=lambda x: x[1])[1]
-    print("NSW", best_node_sim, nsw_time)
-
-    # Naive
-    t0 = time.time()
-    naive_best = max(cosine_similarity(search_vector, v) for v in vectors)
-    naive_time = time.time() - t0
-
-    print("Naive", naive_best, naive_time)
-
-
-def nsw_search(
-    nodes: list[Node], search_vector: list[float], iters: int = 10
-) -> dict[Node, float]:
-    if not nodes:
-        return {}
-
-    def search():
+    def _search(self, search_vector: list[float]):
         sims = {}
-        node = random.choice(nodes)
+        node = random.choice(self.nodes)
         while True:
             if node not in sims:
                 sims[node] = cosine_similarity(search_vector, node.vector)
@@ -84,11 +47,57 @@ def nsw_search(
                 return sims
             node = max_node
 
-    sims = {}
-    for _ in range(iters):
-        sims.update(search())
+    def search(
+        self, search_vector: list[float], iters: int = 10
+    ) -> list[tuple[Node, float]]:
+        if not self.nodes:
+            return []
 
-    return sims
+        sims = {}
+        for _ in range(iters):
+            sims.update(self._search(search_vector))
+
+        return sorted(
+            sims.items(),
+            key=lambda node_sim: -node_sim[1],
+        )
+
+
+def main():
+    print("Starting")
+    vectors = [random_vector(DIM) for _ in range(1000)]
+
+    index = NSW()
+    print("Indexing")
+    t0 = time.time()
+    # Index
+
+    nodes: list[Node] = []
+    for v in vectors:
+        index.add_node(v)
+
+    index_time = time.time() - t0
+    print(f"Indexing took: {index_time:.5f} seconds")
+
+    # Search
+    search_vector = random_vector(DIM)
+
+    print("Searching")
+
+    # NSW
+    t0 = time.time()
+    nsw_sims = index.search(search_vector)
+    nsw_time = time.time() - t0
+
+    best_node_sim = max(nsw_sims, key=lambda x: x[1])[1]
+    print("NSW", best_node_sim, nsw_time)
+
+    # Naive
+    t0 = time.time()
+    naive_best = max(cosine_similarity(search_vector, v) for v in vectors)
+    naive_time = time.time() - t0
+
+    print("Naive", naive_best, naive_time)
 
 
 if __name__ == "__main__":
