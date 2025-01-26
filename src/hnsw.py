@@ -3,7 +3,6 @@ import time
 
 from common import random_vector, cosine_similarity
 
-K = 5
 DIM = 32
 
 
@@ -20,9 +19,15 @@ class Node:
 
 
 class HNSW:
-    def __init__(self, m_l: int, p_l: float = 0.2) -> None:
-        self.layers: list[list[Node]] = [[] for _ in range(m_l)]
-        self.p_l = p_l
+    def __init__(
+        self,
+        n_layers: int,
+        p_layer: float = 0.2,
+        n_edges: tuple[int, int] = (10, 5),
+    ) -> None:
+        self.layers: list[list[Node]] = [[] for _ in range(n_layers)]
+        self.p_layer = p_layer
+        self.n_edges = n_edges
 
     def add_node(self, vector: list[float]) -> None:
         parent = None
@@ -32,7 +37,7 @@ class HNSW:
             # Add to next layer if it's empty, otherwise with probability p_l
             if (
                 i + 1 < len(self.layers) and self.layers[i + 1]
-            ) and random.random() > self.p_l:
+            ) and random.random() > self.p_layer:
                 break
 
     def _add_to_layer(
@@ -40,11 +45,17 @@ class HNSW:
     ) -> Node:
         node_sims = self.layer_search(vector, layer_idx)
 
-        new_node = Node(vector, neighbours=node_sims[:K], parent=parent)
-        for n, sim in node_sims[:K]:
+        k_layer = round(
+            self.n_edges[1]
+            + (self.n_edges[0] - self.n_edges[1])
+            * (len(self.layers) - layer_idx)
+            / len(self.layers)
+        )
+        new_node = Node(vector, neighbours=node_sims[:k_layer], parent=parent)
+        for n, sim in node_sims[:k_layer]:
             n.neighbours = sorted(
                 n.neighbours + [(new_node, sim)], key=lambda node_sim: -node_sim[1]
-            )[:K]
+            )[:k_layer]
 
         self.layers[layer_idx].append(new_node)
         return new_node
@@ -126,7 +137,7 @@ def main():
     print("Indexing")
     t0 = time.time()
     # Index
-    index = HNSW(m_l=3, p_l=0.3)
+    index = HNSW(n_layers=3, p_layer=0.3, n_edges=(5, 10))
     for v in vectors:
         index.add_node(v)
 

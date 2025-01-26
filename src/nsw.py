@@ -3,7 +3,6 @@ import time
 
 from common import random_vector, cosine_similarity
 
-K = 5
 DIM = 32
 
 
@@ -16,17 +15,18 @@ class Node:
 
 
 class NSW:
-    def __init__(self) -> None:
+    def __init__(self, n_edges: int = 5) -> None:
         self.nodes = []
+        self.n_edges = n_edges
 
     def add_node(self, vector: list[float]) -> None:
         node_sims = self.search(vector)
 
-        new_node = Node(vector, neighbours=node_sims[:K])
-        for n, sim in node_sims[:K]:
+        new_node = Node(vector, neighbours=node_sims[: self.n_edges])
+        for n, sim in node_sims[: self.n_edges]:
             n.neighbours = sorted(
                 n.neighbours + [(new_node, sim)], key=lambda node_sim: -node_sim[1]
-            )[:K]
+            )[: self.n_edges]
 
         self.nodes.append(new_node)
 
@@ -70,7 +70,7 @@ def main():
 
     # Index
     print("Indexing")
-    index = NSW()
+    index = NSW(5)
 
     t0 = time.time()
     for v in vectors:
