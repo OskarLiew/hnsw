@@ -1,5 +1,6 @@
 import random
 import time
+import bisect
 
 from common import random_vector, cosine_similarity
 
@@ -17,7 +18,7 @@ class Node:
         return [n[0] for n in self.neighbours]
 
 
-class NSW:
+class NSWEF:
     def __init__(self, n_edges: int = 5, ef_construct: int = 16) -> None:
         self.nodes = []
         self.n_edges = n_edges
@@ -27,9 +28,8 @@ class NSW:
         node_sims = self.search(vector, ef=self.ef_construct)
         new_node = Node(vector, neighbours=node_sims[-self.n_edges :])
         for n, sim in node_sims[-self.n_edges :]:
-            n.neighbours = sorted(n.neighbours + [(new_node, sim)], key=lambda x: x[1])[
-                -self.n_edges :
-            ]
+            bisect.insort(n.neighbours, (new_node, sim), key=lambda x: x[1])
+            n.neighbours = n.neighbours[-self.n_edges :]
 
         self.nodes.append(new_node)
 
@@ -40,13 +40,14 @@ class NSW:
     ) -> list[tuple[Node, float]]:
         if not self.nodes:
             return []
-        return nsw_search(search_vector, self.nodes, ef=ef)
+        node = random.choice(self.nodes)
+        return nsw_search(search_vector, node, ef=ef)
 
 
 def nsw_search(
-    search_vector: list[float], nodes: list[Node], ef: int
+    search_vector: list[float], start_node: Node, ef: int = 8
 ) -> list[tuple[Node, float]]:
-    node = random.choice(nodes)
+    node = start_node
 
     out = [(node, cosine_similarity(search_vector, node.vector))]
     visited = {node}
@@ -62,11 +63,8 @@ def nsw_search(
             visited.add(neigh_node)
             neigh_sim = cosine_similarity(search_vector, neigh_node.vector)
             if neigh_sim > out[-1][1] or len(out) < ef:
-                candidates.append((neigh_node, neigh_sim))
-                candidates.sort(key=lambda x: x[1])
-
-                out.append((neigh_node, neigh_sim))
-                out.sort(key=lambda x: x[1])
+                bisect.insort(candidates, (neigh_node, neigh_sim), key=lambda x: x[1])
+                bisect.insort(out, (neigh_node, neigh_sim), key=lambda x: x[1])
 
                 if len(out) > ef:
                     out.pop(0)
@@ -80,7 +78,7 @@ def main():
 
     # Index
     print("Indexing")
-    index = NSW(10, 32)
+    index = NSWEF(5, 32)
 
     t0 = time.time()
     for v in vectors:
