@@ -5,7 +5,7 @@ import numpy as np
 import scipy.stats
 
 
-from hnsw_paper import HNSW
+from hnsw import HNSW
 from common import random_vector, cosine_distance
 
 DIM = 32

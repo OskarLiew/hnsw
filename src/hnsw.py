@@ -1,166 +1,221 @@
+from bisect import insort
+from heapq import heapify, heappop, heappush
 import math
 import random
 import time
 
-from common import random_vector, cosine_distance
+from common import cosine_distance, random_vector
 
-DIM = 8
-
-
-class Node:
-    def __init__(
-        self,
-        vector: list[float],
-        neighbours: list[tuple["Node", float]] | None = None,
-        parent: "Node | None" = None,
-    ) -> None:
-        self.vector = vector
-        self.neighbours = neighbours or []
-        self.parent = parent
+DIM = 32
+EPS = 1e-6
 
 
 class HNSW:
     def __init__(
         self,
+        m_max: int,
+        ef_construction: int,
         n_layers: int,
-        n_edges: int = 8,
-        p_layer: float | None = None,
+        m_l: float | None = None,
+        prune_connections: bool = False,
+        extend_candidates: bool = False,
     ) -> None:
-        self.layers: list[list[Node]] = [[] for _ in range(n_layers)]
-        self.n_edges = (2 * n_edges, n_edges)
-        self.p_layer = p_layer if p_layer is not None else 1 / math.log(n_edges)
+        self.m_max = m_max
+        self.m_max_0 = m_max * 2
+        self.ef_construction = ef_construction
+        self.n_layers = n_layers
+        self.m_l = m_l
+        self.prune_connections = prune_connections
+        self.extend_candidates = extend_candidates
 
-    def add_node(self, vector: list[float]) -> None:
-        parent = None
-        for i in range(len(self.layers)):
-            parent = self._add_to_layer(vector, i, parent)
+        # id => vector
+        self.vectors: dict[int, list[float]] = {}
 
-            # Add to next layer if it's empty, otherwise with probability p_l
-            if (
-                i + 1 < len(self.layers) and self.layers[i + 1]
-            ) and random.random() > self.p_layer:
-                break
+        # id => layer => [(dist, child_id)]
+        self.neighbours: dict[int, dict[int, list[tuple[float, int]]]] = {
+            i: {} for i in range(n_layers)
+        }
 
-    def _add_to_layer(
-        self, vector: list[float], layer_idx: int, parent: Node | None
-    ) -> Node:
-        node_sims = self.layer_search(vector, layer_idx)
+        self._start_index = 0
 
-        k_layer = round(
-            self.n_edges[1]
-            + (self.n_edges[0] - self.n_edges[1])
-            * (len(self.layers) - layer_idx)
-            / len(self.layers)
-        )
-        new_node = Node(vector, neighbours=node_sims[:k_layer], parent=parent)
-        for n, sim in node_sims[:k_layer]:
-            n.neighbours = sorted(
-                n.neighbours + [(new_node, sim)], key=lambda node_sim: -node_sim[1]
-            )[:k_layer]
+    @property
+    def m_total(self) -> int:
+        return len(self.vectors)
 
-        self.layers[layer_idx].append(new_node)
-        return new_node
+    def insert(self, vector: list[float]) -> None:
+        insert_idx = self.m_total
+        self.vectors[insert_idx] = vector
 
-    def layer_search(
-        self,
-        search_vector: list[float],
-        layer_idx: int,
-        start_node: Node | None = None,
-        iters: int = 10,
-    ) -> list[tuple[Node, float]]:
-        nodes = self.layers[layer_idx]
-        if not nodes:
-            return []
+        # If first node, insert to all layers
+        if len(self.vectors) == 1:
+            insert_layer = self.n_layers - 1
+            for i_layer in range(self.n_layers - 1, -1, -1):
+                self.neighbours[i_layer][insert_idx] = []
+            return
 
-        sims: dict[Node, float] = {}
-        for _ in range(iters):
-            sims.update(nsw_search(search_vector, nodes, start_node))
+        # Select layer exponentially distributed
+        m_l = self.m_l if self.m_l else 1 / math.log(self.m_total + EPS)
+        insert_layer = math.floor(-math.log(random.random()) * m_l)
+        insert_layer = min(insert_layer, self.n_layers - 1)
 
-        return sorted(
-            sims.items(),
-            key=lambda node_sim: -node_sim[1],
-        )
+        # Find start point in insert layer
+        start_indices = [self._start_index]
+        for i_layer in range(self.n_layers - 1, insert_layer, -1):
+            neighbours = self._search_layer(start_indices, vector, i_layer, ef=1)
+            start_indices = [neighbours[0][1]]
 
-    def search(
-        self, search_vector: list[float], iters: int = 10
-    ) -> list[tuple[Node, float]]:
-        def search():
-            sims = {}
-            start_node = None
-            for layer_idx in reversed(range(len(self.layers))):
-                node_sims = self.layer_search(
-                    search_vector, layer_idx, start_node, iters=1
+        # Go through all layers from insert layer and down
+        for i_layer in range(insert_layer, -1, -1):
+            # Find the nearest neighbours of the vector
+            neighbours = self._search_layer(
+                start_indices, vector, i_layer, ef=self.ef_construction
+            )
+
+            # Set neighbours. Use m_max_0 if bottom layer
+            m_max = self.m_max if i_layer else self.m_max_0
+            self.neighbours[i_layer][insert_idx] = neighbours[:m_max]
+
+            # Update neighbour edges
+            for n_dist, n_id in neighbours:
+                candidates = self.neighbours[i_layer][n_id].copy()
+                insort(candidates, (n_dist, insert_idx))
+                self.neighbours[i_layer][n_id] = self._select_neighbours(
+                    i_layer,
+                    candidates,
+                    m=m_max,
+                    extend_candidates=self.extend_candidates,
+                    prune_connections=self.prune_connections,
                 )
 
-                best_node = node_sims[0][0]
-                if not best_node.parent:
-                    break
+            start_indices = [n[1] for n in neighbours]
 
-                start_node = best_node.parent
-                sims.update(node_sims)
+        # Update start point if there is a new top layer node
+        if insert_layer == self.n_layers:
+            self._start_index = insert_idx
 
-            return sims
+    def _search_layer(
+        self, start_indices: list[int], vector: list[float], layer: int, ef: int
+    ) -> list[tuple[float, int]]:
+        visited = set(start_indices)
 
-        sims: dict[Node, float] = {}
-        for _ in range(iters):
-            sims.update(search())
+        neighbours = [
+            (cosine_distance(vector, self.vectors[i]), i) for i in start_indices
+        ]
+        neighbours.sort()
 
-        return sorted(
-            sims.items(),
-            key=lambda node_sim: -node_sim[1],
-        )
+        # Create a priority queue of candidates
+        candidates = neighbours.copy()
+        heapify(candidates)
 
+        while candidates:
+            # Take the best candidate
+            candidate = heappop(candidates)
+            furthest_adj = neighbours[-1]
 
-def nsw_search(
-    search_vector: list[float], nodes: list[Node], start_node: Node | None
-) -> dict[Node, float]:
-    sims = {}
-    node = start_node or random.choice(nodes)
-    while True:
-        if node not in sims:
-            sims[node] = cosine_distance(search_vector, node.vector)
+            # Stop if best candidate is worse than best neighbour
+            if candidate[0] > furthest_adj[0]:
+                break
 
-        for n, _ in node.neighbours:
-            if n in sims:
-                continue
-            sims[n] = cosine_distance(search_vector, n.vector)
+            # Go through all the candidate's adjacent vectors
+            for candidate_adj in self.neighbours[layer][candidate[1]]:
+                if candidate_adj[1] in visited:
+                    continue
+                visited.add(candidate_adj[1])
 
-        max_node, _ = max(sims.items(), key=lambda x: x[1])
-        if max_node == node:
-            return sims
-        node = max_node
+                # If candidate_adj is closer than worst neighbour add it to neighbours and candidates
+                adj_dist = cosine_distance(vector, self.vectors[candidate_adj[1]])
+                if adj_dist < neighbours[-1][0] or len(neighbours) < ef:
+                    heappush(candidates, (adj_dist, candidate_adj[1]))
+                    insort(neighbours, (adj_dist, candidate_adj[1]))
+                    if len(neighbours) > ef:
+                        neighbours.pop()
+
+        return neighbours
+
+    def search(self, vector: list[float], ef: int) -> list[tuple[float, int]]:
+        start_indices = [0]
+        neighbours = []
+        for i_layer in range(self.n_layers - 1, -1, -1):
+            neighbours = self._search_layer(start_indices, vector, i_layer, ef)
+            start_indices = [neighbours[0][1]]
+        return neighbours
+
+    def _select_neighbours(
+        self,
+        layer: int,
+        candidates: list[tuple[float, int]],
+        m: int,
+        extend_candidates: bool,
+        prune_connections: bool,
+    ) -> list[tuple[float, int]]:
+        out = []
+        neighbours = candidates.copy()
+
+        # Extend search to include neighbours of neighbours
+        if extend_candidates:
+            for candidate in candidates:
+                for candidate_adj in self.neighbours[layer][candidate[1]]:
+                    if candidate_adj not in neighbours:
+                        insort(neighbours, candidate_adj)
+
+        if not prune_connections:
+            return neighbours[:m]
+
+        # Add all neighbours that are sufficiently close
+        while neighbours and len(out) < m:
+            candidate = neighbours.pop(0)
+            if not out or candidate[0] < out[0][0]:
+                insort(out, candidate)
+
+        return out
 
 
 def main():
     print("Starting")
     vectors = [random_vector(DIM) for _ in range(2000)]
+    search_vector = random_vector(DIM)
 
     print("Indexing")
     t0 = time.time()
+
+    ### HNSW
     # Index
-    index = HNSW(n_layers=4, n_edges=8)
+    index = HNSW(
+        n_layers=4,
+        m_max=24,
+        m_l=None,
+        ef_construction=32,
+        prune_connections=False,
+        extend_candidates=False,
+    )
     for v in vectors:
-        index.add_node(v)
+        index.insert(v)
+
+    for l, d in index.neighbours.items():
+        print(l, len(d))
 
     index_time = time.time() - t0
     print(f"Indexing took: {index_time:.5f} seconds")
 
     # Search
-    search_vector = random_vector(DIM)
-
     print("Searching")
+    t0 = time.time()
+    hnsw_dists = index.search(search_vector, ef=16)
+    hnsw_time = time.time() - t0
+    print("HNSW", hnsw_dists[0][0], hnsw_time)
 
     # NSW
+    index.neighbours = {0: index.neighbours[0]}
+    index.n_layers = 1
+    print("Searching")
     t0 = time.time()
-    hnsw_sims = index.search(search_vector)
+    hnsw_dists = index.search(search_vector, ef=16)
     hnsw_time = time.time() - t0
-
-    best_node_sim = max(hnsw_sims, key=lambda x: x[1])[1]
-    print("HNSW", best_node_sim, hnsw_time)
+    print("NSW", hnsw_dists[0][0], hnsw_time)
 
     # Naive
     t0 = time.time()
-    naive_best = max(cosine_distance(search_vector, v) for v in vectors)
+    naive_best = min(cosine_distance(search_vector, v) for v in vectors)
     naive_time = time.time() - t0
 
     print("Naive", naive_best, naive_time)
