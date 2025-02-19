@@ -4,9 +4,10 @@ import math
 import random
 import time
 
-from common import cosine_similarity, random_vector
+from common import cosine_distance, random_vector
 
 DIM = 32
+EPS = 1e-6
 
 
 class HNSW:
@@ -35,6 +36,8 @@ class HNSW:
             i: {} for i in range(n_layers)
         }
 
+        self._start_index = 0
+
     @property
     def m_total(self) -> int:
         return len(self.vectors)
@@ -51,12 +54,12 @@ class HNSW:
             return
 
         # Select layer exponentially distributed
-        m_l = self.m_l if self.m_l else 1 / math.log(self.m_total)
+        m_l = self.m_l if self.m_l else 1 / math.log(self.m_total + EPS)
         insert_layer = math.floor(-math.log(random.random()) * m_l)
         insert_layer = min(insert_layer, self.n_layers - 1)
 
         # Find start point in insert layer
-        start_indices = [0]
+        start_indices = [self._start_index]
         for i_layer in range(self.n_layers - 1, insert_layer, -1):
             neighbours = self._search_layer(start_indices, vector, i_layer, ef=1)
             start_indices = [neighbours[0][1]]
@@ -73,9 +76,9 @@ class HNSW:
             self.neighbours[i_layer][insert_idx] = neighbours[:m_max]
 
             # Update neighbour edges
-            for n_sim, n_id in neighbours:
+            for n_dist, n_id in neighbours:
                 candidates = self.neighbours[i_layer][n_id].copy()
-                insort(candidates, (n_sim, insert_idx))
+                insort(candidates, (n_dist, insert_idx))
                 self.neighbours[i_layer][n_id] = self._select_neighbours(
                     i_layer,
                     candidates,
@@ -86,34 +89,44 @@ class HNSW:
 
             start_indices = [n[1] for n in neighbours]
 
+        # Update start point if there is a new top layer node
+        if insert_layer == self.n_layers:
+            self._start_index = insert_idx
+
     def _search_layer(
         self, start_indices: list[int], vector: list[float], layer: int, ef: int
     ) -> list[tuple[float, int]]:
         visited = set(start_indices)
-        neighbours = [
-            (cosine_similarity(vector, self.vectors[i]), i) for i in start_indices
-        ]
 
+        neighbours = [
+            (cosine_distance(vector, self.vectors[i]), i) for i in start_indices
+        ]
+        neighbours.sort()
+
+        # Create a priority queue of candidates
         candidates = neighbours.copy()
         heapify(candidates)
 
         while candidates:
+            # Take the best candidate
             candidate = heappop(candidates)
-            furthest_neigh = neighbours[-1]
+            furthest_adj = neighbours[-1]
 
-            if candidate[0] > furthest_neigh[0]:
+            # Stop if best candidate is worse than best neighbour
+            if candidate[0] > furthest_adj[0]:
                 break
 
-            for c_neigh in self.neighbours[layer][candidate[1]]:
-                if c_neigh[1] in visited:
+            # Go through all the candidate's adjacent vectors
+            for candidate_adj in self.neighbours[layer][candidate[1]]:
+                if candidate_adj[1] in visited:
                     continue
+                visited.add(candidate_adj[1])
 
-                visited.add(c_neigh[1])
-                furthest_neigh = neighbours[-1]
-                neigh_sim = cosine_similarity(vector, self.vectors[c_neigh[1]])
-                if neigh_sim < neighbours[0][0] or len(neighbours) < ef:
-                    heappush(candidates, (neigh_sim, c_neigh[1]))
-                    insort(neighbours, (neigh_sim, c_neigh[1]))
+                # If candidate_adj is closer than worst neighbour add it to neighbours and candidates
+                adj_dist = cosine_distance(vector, self.vectors[candidate_adj[1]])
+                if adj_dist < neighbours[-1][0] or len(neighbours) < ef:
+                    heappush(candidates, (adj_dist, candidate_adj[1]))
+                    insort(neighbours, (adj_dist, candidate_adj[1]))
                     if len(neighbours) > ef:
                         neighbours.pop()
 
@@ -187,22 +200,22 @@ def main():
     # Search
     print("Searching")
     t0 = time.time()
-    hnsw_sims = index.search(search_vector, ef=16)
+    hnsw_dists = index.search(search_vector, ef=16)
     hnsw_time = time.time() - t0
-    print("HNSW", hnsw_sims[0][0], hnsw_time)
+    print("HNSW", hnsw_dists[0][0], hnsw_time)
 
     # NSW
     index.neighbours = {0: index.neighbours[0]}
     index.n_layers = 1
     print("Searching")
     t0 = time.time()
-    hnsw_sims = index.search(search_vector, ef=16)
+    hnsw_dists = index.search(search_vector, ef=16)
     hnsw_time = time.time() - t0
-    print("NSW", hnsw_sims[0][0], hnsw_time)
+    print("NSW", hnsw_dists[0][0], hnsw_time)
 
     # Naive
     t0 = time.time()
-    naive_best = min(cosine_similarity(search_vector, v) for v in vectors)
+    naive_best = min(cosine_distance(search_vector, v) for v in vectors)
     naive_time = time.time() - t0
 
     print("Naive", naive_best, naive_time)

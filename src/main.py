@@ -1,15 +1,12 @@
 import time
 
 import tqdm
-from hnsw_ef import HNSWEF
-from nsw_ef import NSWEF
 import numpy as np
 import scipy.stats
 
 
-from nsw import NSW
-from hnsw import HNSW
-from common import random_vector, cosine_similarity
+from hnsw_paper import HNSW
+from common import random_vector, cosine_distance
 
 DIM = 32
 
@@ -17,7 +14,7 @@ N_SAMPLES = 100
 
 
 def main():
-    vectors = [random_vector(DIM) for _ in range(10000)]
+    vectors = [random_vector(DIM) for _ in range(1000)]
     search_vector = random_vector(DIM)
 
     # Naive
@@ -28,86 +25,60 @@ def main():
     naive_times = np.array([x[1] for x in naive_results])
     mean, diff = mean_and_interval(naive_times, confidence=0.95)
     print(
-        f"Similarity: {naive_results[0][0]:.4f}\n"
+        f"Distance: {naive_results[0][0]:.4f}\n"
         f"Runtime: {mean:.4f} +/- {diff:.3e} seconds\n"
     )
 
-    # NSW
-    n_edges = 16
-    nsw_index = NSW(n_edges=n_edges)
-    for vector in tqdm.tqdm(vectors, desc="Indexing NSW"):
-        nsw_index.add_node(vector)
-    nsw_results = [
-        index_search(search_vector, nsw_index)
-        for _ in tqdm.trange(N_SAMPLES, desc="NSW search")
-    ]
-    nsw_sims = np.array([x[0] for x in nsw_results])
-    nsw_times = np.array([x[1] for x in nsw_results])
-    mean_sims, diff_sims = mean_and_interval(nsw_sims, confidence=0.95)
-    mean_time, diff_time = mean_and_interval(nsw_times, confidence=0.95)
-    print(
-        f"Similarity: {mean_sims:.4f} +/- {diff_sims:.3e}, median {np.median(nsw_sims):.4f}\n"
-        f"Runtime: {mean_time:.4f} +/- {diff_time:.3e} seconds\n"
-    )
-
-    # HNSW
-    hnsw_index = HNSW(
+    ### HNSW
+    print("Indexing")
+    t0 = time.time()
+    index = HNSW(
         n_layers=4,
-        n_edges=8,
+        m_max=12,
+        ef_construction=64,
+        m_l=None,
+        prune_connections=False,
+        extend_candidates=False,
     )
-    for vector in tqdm.tqdm(vectors, desc="Indexing HNSW"):
-        hnsw_index.add_node(vector)
+    for v in tqdm.tqdm(vectors, desc="HNSW indexing"):
+        index.insert(v)
 
+    index_time = time.time() - t0
+    print(f"Indexing took: {index_time:.5f} seconds")
+
+    print("Graph layers")
+    for l, d in index.neighbours.items():
+        print(l, len(d))
+
+    # Search
     hnsw_results = [
-        index_search(search_vector, hnsw_index)
+        index_search(search_vector, index, ef=16)
         for _ in tqdm.trange(N_SAMPLES, desc="HNSW search")
     ]
-    hnsw_sims = np.array([x[0] for x in hnsw_results])
+
+    hnsw_dists = np.array([x[0] for x in hnsw_results])
     hnsw_times = np.array([x[1] for x in hnsw_results])
-    mean_sims, diff_sims = mean_and_interval(hnsw_sims, confidence=0.95)
+    mean_dists, diff_dists = mean_and_interval(hnsw_dists, confidence=0.95)
     mean_time, diff_time = mean_and_interval(hnsw_times, confidence=0.95)
     print(
-        f"Similarity: {mean_sims:.4f} +/- {diff_sims:.3e}, median {np.median(nsw_sims):.4f}\n"
+        f"Distance: {mean_dists:.4f} +/- {diff_dists:.3e}, median {np.median(hnsw_dists):.4f}\n"
         f"Runtime: {mean_time:.4f} +/- {diff_time:.3e} seconds\n"
     )
 
-    # NSWEF
-    n_edges = 16
-    nsw_index = NSWEF(n_edges=n_edges, ef_construct=32)
-    for vector in tqdm.tqdm(vectors, desc="Indexing NSW w/ priority queue"):
-        nsw_index.add_node(vector)
+    # NSW
+    index.n_layers = 1
+    # Search
     nsw_results = [
-        index_search(search_vector, nsw_index)
-        for _ in tqdm.trange(N_SAMPLES, desc="NSW w/ priority queue search")
+        index_search(search_vector, index, ef=16)
+        for _ in tqdm.trange(N_SAMPLES, desc="NSW search")
     ]
-    nsw_sims = np.array([x[0] for x in nsw_results])
+
+    nsw_dists = np.array([x[0] for x in nsw_results])
     nsw_times = np.array([x[1] for x in nsw_results])
-    mean_sims, diff_sims = mean_and_interval(nsw_sims, confidence=0.95)
+    mean_dists, diff_dists = mean_and_interval(nsw_dists, confidence=0.95)
     mean_time, diff_time = mean_and_interval(nsw_times, confidence=0.95)
     print(
-        f"Similarity: {mean_sims:.4f} +/- {diff_sims:.3e}, median {np.median(nsw_sims):.4f}\n"
-        f"Runtime: {mean_time:.4f} +/- {diff_time:.3e} seconds\n"
-    )
-
-    # HNSWEF
-    hnsw_index = HNSWEF(
-        n_layers=4,
-        n_edges=8,
-        ef_construct=32,
-    )
-    for vector in tqdm.tqdm(vectors, desc="Indexing HNSW w/ priority queue"):
-        hnsw_index.add_node(vector)
-
-    hnsw_results = [
-        index_search(search_vector, hnsw_index)
-        for _ in tqdm.trange(N_SAMPLES, desc="HNSW search w/ priority queue")
-    ]
-    hnsw_sims = np.array([x[0] for x in hnsw_results])
-    hnsw_times = np.array([x[1] for x in hnsw_results])
-    mean_sims, diff_sims = mean_and_interval(hnsw_sims, confidence=0.95)
-    mean_time, diff_time = mean_and_interval(hnsw_times, confidence=0.95)
-    print(
-        f"Similarity: {mean_sims:.4f} +/- {diff_sims:.3e}, median {np.median(nsw_sims):.4f}\n"
+        f"Distance: {mean_dists:.4f} +/- {diff_dists:.3e}, median {np.median(nsw_dists):.4f}\n"
         f"Runtime: {mean_time:.4f} +/- {diff_time:.3e} seconds\n"
     )
 
@@ -116,16 +87,18 @@ def naive(
     search_vector: list[float], vectors: list[list[float]]
 ) -> tuple[float, float]:
     t0 = time.time()
-    best_sim = max(cosine_similarity(search_vector, v) for v in vectors)
+    best_dists = min(cosine_distance(search_vector, v) for v in vectors)
     runtime = time.time() - t0
-    return best_sim, runtime
+    return best_dists, runtime
 
 
-def index_search(search_vector: list[float], index) -> tuple[float, float]:
+def index_search(
+    search_vector: list[float], index: HNSW, **kwargs
+) -> tuple[float, float]:
     t0 = time.time()
-    node_sims = index.search(search_vector)
+    node_dists = index.search(search_vector, **kwargs)
     runtime = time.time() - t0
-    return node_sims[0][1], runtime
+    return node_dists[0][0], runtime
 
 
 def mean_and_interval(data, confidence=0.95):

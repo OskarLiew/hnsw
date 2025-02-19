@@ -2,7 +2,7 @@ import random
 import time
 import bisect
 
-from common import random_vector, cosine_similarity
+from common import random_vector, cosine_distance
 
 DIM = 32
 
@@ -51,7 +51,7 @@ def nsw_search(
 
     out = [(node, cosine_similarity(search_vector, node.vector))]
     visited = {node}
-    candidates = out.copy()
+    candidates = ocosine_distance
 
     while candidates:
         candidate_node, _ = candidates.pop(-1)
@@ -63,7 +63,7 @@ def nsw_search(
             visited.add(neigh_node)
             neigh_sim = cosine_similarity(search_vector, neigh_node.vector)
             if neigh_sim > out[-1][1] or len(out) < ef:
-                bisect.insort(candidates, (neigh_node, neigh_sim), key=lambda x: x[1])
+                bisect.icosine_distance (neigh_node, neigh_sim), key=lambda x: x[1])
                 bisect.insort(out, (neigh_node, neigh_sim), key=lambda x: x[1])
 
                 if len(out) > ef:
@@ -104,7 +104,7 @@ def main():
     t0 = time.time()
     naive_best = max(cosine_similarity(search_vector, v) for v in vectors)
     naive_time = time.time() - t0
-
+cosine_distance
     print("Naive", naive_best, naive_time)
 
 

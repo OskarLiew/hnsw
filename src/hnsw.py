@@ -2,7 +2,7 @@ import math
 import random
 import time
 
-from common import random_vector, cosine_similarity
+from common import random_vector, cosine_distance
 
 DIM = 8
 
@@ -118,12 +118,12 @@ def nsw_search(
     node = start_node or random.choice(nodes)
     while True:
         if node not in sims:
-            sims[node] = cosine_similarity(search_vector, node.vector)
+            sims[node] = cosine_distance(search_vector, node.vector)
 
         for n, _ in node.neighbours:
             if n in sims:
                 continue
-            sims[n] = cosine_similarity(search_vector, n.vector)
+            sims[n] = cosine_distance(search_vector, n.vector)
 
         max_node, _ = max(sims.items(), key=lambda x: x[1])
         if max_node == node:
@@ -160,7 +160,7 @@ def main():
 
     # Naive
     t0 = time.time()
-    naive_best = max(cosine_similarity(search_vector, v) for v in vectors)
+    naive_best = max(cosine_distance(search_vector, v) for v in vectors)
     naive_time = time.time() - t0
 
     print("Naive", naive_best, naive_time)
