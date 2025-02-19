@@ -1,6 +1,5 @@
 from bisect import insort
-from collections import defaultdict
-from heapq import heappop, heappush
+from heapq import heapify, heappop, heappush
 import math
 import random
 import time
@@ -11,19 +10,30 @@ DIM = 32
 
 
 class HNSW:
-    def __init__(self, m_max: int, ef_construction: int, n_layers: int) -> None:
+    def __init__(
+        self,
+        m_max: int,
+        ef_construction: int,
+        n_layers: int,
+        m_l: float | None = None,
+        prune_connections: bool = False,
+        extend_candidates: bool = False,
+    ) -> None:
         self.m_max = m_max
         self.m_max_0 = m_max * 2
         self.ef_construction = ef_construction
         self.n_layers = n_layers
+        self.m_l = m_l
+        self.prune_connections = prune_connections
+        self.extend_candidates = extend_candidates
 
         # id => vector
         self.vectors: dict[int, list[float]] = {}
 
         # id => layer => [(dist, child_id)]
-        self.neighbours: dict[int, dict[int, list[tuple[float, int]]]] = defaultdict(
-            dict
-        )
+        self.neighbours: dict[int, dict[int, list[tuple[float, int]]]] = {
+            i: {} for i in range(n_layers)
+        }
 
     @property
     def m_total(self) -> int:
@@ -41,9 +51,8 @@ class HNSW:
             return
 
         # Select layer exponentially distributed
-        insert_layer = math.floor(
-            -math.log(random.random()) * 1 / math.log(self.m_total)
-        )
+        m_l = self.m_l if self.m_l else 1 / math.log(self.m_total)
+        insert_layer = math.floor(-math.log(random.random()) * m_l)
         insert_layer = min(insert_layer, self.n_layers - 1)
 
         # Find start point in insert layer
@@ -65,9 +74,15 @@ class HNSW:
 
             # Update neighbour edges
             for n_sim, n_id in neighbours:
-                # Could use more advanced select here
-                insort(self.neighbours[i_layer][n_id], (n_sim, insert_idx))
-                self.neighbours[i_layer][n_id] = self.neighbours[i_layer][n_id][:m_max]
+                candidates = self.neighbours[i_layer][n_id].copy()
+                insort(candidates, (n_sim, insert_idx))
+                self.neighbours[i_layer][n_id] = self._select_neighbours(
+                    i_layer,
+                    candidates,
+                    m=m_max,
+                    extend_candidates=self.extend_candidates,
+                    prune_connections=self.prune_connections,
+                )
 
             start_indices = [n[1] for n in neighbours]
 
@@ -75,10 +90,12 @@ class HNSW:
         self, start_indices: list[int], vector: list[float], layer: int, ef: int
     ) -> list[tuple[float, int]]:
         visited = set(start_indices)
-        candidates = [
+        neighbours = [
             (cosine_similarity(vector, self.vectors[i]), i) for i in start_indices
         ]
-        neighbours = candidates.copy()
+
+        candidates = neighbours.copy()
+        heapify(candidates)
 
         while candidates:
             candidate = heappop(candidates)
@@ -110,73 +127,78 @@ class HNSW:
             start_indices = [neighbours[0][1]]
         return neighbours
 
-    def _select_neighbours_heuristic(
+    def _select_neighbours(
         self,
         layer: int,
         candidates: list[tuple[float, int]],
         m: int,
-        extend: bool = False,
-        keep: bool = False,
+        extend_candidates: bool,
+        prune_connections: bool,
     ) -> list[tuple[float, int]]:
         out = []
         neighbours = candidates.copy()
 
         # Extend search to include neighbours of neighbours
-        if extend:
+        if extend_candidates:
             for candidate in candidates:
                 for candidate_adj in self.neighbours[layer][candidate[1]]:
-                    if candidate_adj in neighbours:
-                        continue
-                    heappush(neighbours, candidate_adj)
+                    if candidate_adj not in neighbours:
+                        insort(neighbours, candidate_adj)
+
+        if not prune_connections:
+            return neighbours[:m]
 
         # Add all neighbours that are sufficiently close
-        discarded = []
         while neighbours and len(out) < m:
-            candidate = heappop(candidates)
-            if not out or candidate[0] < out[0]:
-                heappush(out, candidate)
-            else:
-                heappush(discarded, candidate)
-
-        # Keep pruned connections until #connections is m
-        if keep:
-            while discarded and len(out) < m:
-                nearest_discarded = heappop(discarded)
-                heappush(out, nearest_discarded)
-
-            raise NotImplemented
+            candidate = neighbours.pop(0)
+            if not out or candidate[0] < out[0][0]:
+                insort(out, candidate)
 
         return out
 
 
 def main():
     print("Starting")
-    vectors = [random_vector(DIM) for _ in range(1000)]
+    vectors = [random_vector(DIM) for _ in range(2000)]
+    search_vector = random_vector(DIM)
 
     print("Indexing")
     t0 = time.time()
+
+    ### HNSW
     # Index
-    index = HNSW(n_layers=4, m_max=5, ef_construction=32)
+    index = HNSW(
+        n_layers=4,
+        m_max=24,
+        m_l=None,
+        ef_construction=32,
+        prune_connections=False,
+        extend_candidates=False,
+    )
     for v in vectors:
         index.insert(v)
+
+    for l, d in index.neighbours.items():
+        print(l, len(d))
 
     index_time = time.time() - t0
     print(f"Indexing took: {index_time:.5f} seconds")
 
-    for l, e in index.neighbours.items():
-        print(l, len(e))
-
     # Search
-    search_vector = random_vector(DIM)
-
     print("Searching")
-
-    # NSW
     t0 = time.time()
     hnsw_sims = index.search(search_vector, ef=16)
     hnsw_time = time.time() - t0
-
     print("HNSW", hnsw_sims[0][0], hnsw_time)
+
+    # NSW
+    index.neighbours = {0: index.neighbours[0]}
+    index.n_layers = 1
+    print("Searching")
+    t0 = time.time()
+    hnsw_sims = index.search(search_vector, ef=16)
+    hnsw_time = time.time() - t0
+    print("NSW", hnsw_sims[0][0], hnsw_time)
 
     # Naive
     t0 = time.time()
